@@ -1,0 +1,12 @@
+# Extras layered on top of the rocm/vllm base image.
+# ROCm, PyTorch, and vLLM are ALREADY in the base — do not reinstall them here
+# (reinstalling torch will clobber the ROCm build with a CUDA wheel and break the container).
+#
+# Keep this list minimal. Add packages only when the orchestrator code under app/
+# actually imports them.
+
+# OpenAI-compatible client used to talk to the local vLLM server and (later) Fireworks.
+openai>=1.40.0
+
+# HTTP client for health checks / verification scripts.
+httpx>=0.27.0
