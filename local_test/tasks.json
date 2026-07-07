@@ -1,0 +1,7 @@
+[
+  { "task_id": "t1", "prompt": "Summarise in one sentence: The mitochondrion is the powerhouse of the cell, producing ATP through oxidative phosphorylation." },
+  { "task_id": "t2", "prompt": "What is 17% of 250?" },
+  { "task_id": "t3", "prompt": "Classify sentiment (positive/negative/neutral) and justify in one clause: 'The battery drains before lunch.'" },
+  { "task_id": "t4", "prompt": "Extract named entities as JSON with keys person, org, location, date: 'Marie Curie received the Nobel Prize in Stockholm in 1911.'" },
+  { "task_id": "t5", "prompt": "Fix the bug and return only the corrected function:\ndef avg(xs):\n    return sum(xs) / len(xs) + 1" }
+]

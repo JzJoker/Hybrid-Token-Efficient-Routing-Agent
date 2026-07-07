@@ -1,1 +1,4 @@
 claudelocal.md
+.env
+.env.*
+out/
