@@ -1,90 +1,80 @@
 # Hybrid-Token-Efficient-Routing-Agent
 
-ScoobaCats submission for the AMD Developer Hackathon ACT II, Track 1
-(Hybrid Token-Efficient Routing Agent).
+ScoobaCats submission for the **AMD Developer Hackathon ACT II, Track 1
+(General-Purpose AI Agent)**.
 
-This repo currently contains the **local-inference container skeleton**: a
-Docker image that boots a vLLM ROCm server on an AMD Instinct MI300X and
-exposes an OpenAI-compatible endpoint on port 8000. Routing, confidence, and
-escalation logic land in later tasks — this milestone is *green boot + one
-successful request*.
+A batch container that reads NL tasks, routes each to the most token-efficient
+model in the harness-provided allowlist, and writes back results. Ranked by
+accuracy-gate pass + ascending token count.
 
-## Pinned base image
+## Container contract
 
-`rocm/vllm:rocm7.13.0_gfx94X-dcgpu_ubuntu24.04_py3.13_pytorch_2.10.0_vllm_0.19.1`
+| | |
+|---|---|
+| Base image | `python:3.12-slim` (`linux/amd64`) |
+| Entrypoint | `python -m app.main` (batch — no server) |
+| Reads | `/input/tasks.json` |
+| Writes | `/output/results.json` |
+| Env in | `FIREWORKS_API_KEY`, `FIREWORKS_BASE_URL`, `ALLOWED_MODELS` |
+| Runtime cap | 10 min total, 30 s per request, 60 s cold-start |
+| Image cap | 10 GB compressed |
 
-- MI300X's arch is `gfx942`. AMD groups the datacenter gfx94x GPUs under the
-  `gfx94X-dcgpu` tag family on Docker Hub, so this tag targets MI300X.
-- Do **not** change to `:latest` — reproducibility on the scoring box is the
-  whole point of pinning.
+All Fireworks calls go through `FIREWORKS_BASE_URL` (harness proxy — records
+tokens for scoring). Direct-to-Fireworks calls score zero. Model IDs are read
+from `ALLOWED_MODELS` at runtime — never hardcoded.
 
 ## Build
 
-```sh
-docker build -t scoobacats-agent:dev .
-```
-
-Building locally on a laptop (no GPU) will succeed — vLLM won't start without
-ROCm devices, but the image itself builds fine.
-
-## Run on an MI300X instance
-
-Spin up a single MI300X on AMD Developer Cloud, then:
+Judging VM is `linux/amd64`. On Apple Silicon you **must** cross-build:
 
 ```sh
-docker run -it --rm \
-  --device /dev/kfd \
-  --device /dev/dri \
-  --network=host \
-  --ipc=host \
-  --group-add=video \
-  --cap-add=SYS_PTRACE \
-  --security-opt seccomp=unconfined \
-  -v ~/.cache/huggingface:/root/.cache/huggingface \
-  --env HF_TOKEN=$HF_TOKEN \
-  -p 8000:8000 \
-  scoobacats-agent:dev
+docker buildx build --platform linux/amd64 \
+  --tag ghcr.io/<owner>/scoobacats-track1:dev \
+  --push .
 ```
 
-The default `MODEL` is `Qwen/Qwen3-0.6B` (ungated, tiny — used to prove infra).
-Override for Gemma (Step B) once you've accepted the license on the HF model
-page and exported `HF_TOKEN`:
+On an Intel/AMD host or GitHub Actions:
 
 ```sh
-docker run ... --env MODEL=google/gemma-2-2b-it ... scoobacats-agent:dev
+docker build -t scoobacats-track1:dev .
 ```
 
-## Verify
+## Local test
 
-From the MI300X instance, after the log shows the server is up:
+Use `local_test/tasks.json` as sample input. Point `FIREWORKS_BASE_URL` at your
+own Fireworks endpoint for dev; the harness will inject its proxy URL at
+evaluation time.
 
 ```sh
-# List models
-curl http://localhost:8000/v1/models
+mkdir -p out
+docker run --rm \
+  --env FIREWORKS_API_KEY=$FIREWORKS_API_KEY \
+  --env FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1 \
+  --env ALLOWED_MODELS=accounts/fireworks/models/qwen3-30b-a3b \
+  -v "$PWD/local_test":/input:ro \
+  -v "$PWD/out":/output \
+  scoobacats-track1:dev
 
-# One chat completion
-curl http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "Qwen/Qwen3-0.6B",
-    "messages": [{"role": "user", "content": "Say hello in 3 words."}],
-    "max_tokens": 16
-  }'
+cat out/results.json
 ```
 
-A valid JSON response = infra proven. Stop the instance immediately after
-verification passes so idle GPU time isn't billed.
+## Extension points
 
-## Gotchas
+The skeleton always picks the first model in `ALLOWED_MODELS`. The token-
+efficiency ranking is won by upgrading these two functions in `app/main.py`:
 
-- **Gated models 401**: unaccepted license or missing/wrong `HF_TOKEN`, not a
-  container bug.
-- **HIP graph hangs**: add `--enforce-eager` to the `vllm serve` command as a
-  diagnostic.
-- **dtype**: ROCm prefers `float16`. This is set explicitly in the Dockerfile
-  CMD to avoid the bfloat16 auto-cast warning.
-- **Do not reinstall torch/vllm/rocm in `requirements.txt`** — the base image
-  already ships tuned builds; a pip reinstall pulls the CUDA wheel and breaks
-  the container.
-- **GPU sanity check**: inside the running container, `rocm-smi` should show
-  the MI300X with ~192 GB HBM. If not, device passthrough flags are wrong.
+- `choose_model(task, allowed)` — classify the prompt into one of the 8
+  capability buckets (factual / math / sentiment / summarisation / NER /
+  code-debug / logic / code-gen) and pick the cheapest model that will still
+  clear the accuracy gate for that bucket.
+- `run_task(...)` — add capability-specific system prompts, response-length
+  hints, and verify-then-shrink loops. Every saved token moves you up the
+  leaderboard.
+
+## Non-goals for Track 1
+
+- No local model inference. Local tokens count as **zero** — all inference
+  must be a Fireworks call through `FIREWORKS_BASE_URL`.
+- No AMD/ROCm/MI300X in the runtime path. The judging VM is a plain
+  `linux/amd64` host.
+- No persistent server. Batch in, batch out, exit 0.
